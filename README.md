@@ -1,59 +1,52 @@
-# ENEM Classifier
+# ENEM-LLM-RAG
 
-Pipeline de extração, limpeza e consolidação de questões do ENEM (2009–2024) para treinamento de modelos de classificação por **disciplina**, **tópico** e **competência/habilidade**.
+Classificação de questões do ENEM (2009–2024) por **habilidade** da Matriz de Referência oficial, usando um LLM local (Ollama) com saída estruturada.
 
-## Objetivo
+## Motivação
 
-Construir um dataset unificado de questões do ENEM a partir de múltiplas fontes públicas, para servir de base a um classificador (com potencial de virar API ou dashboard de consulta).
+As bases públicas de questões do ENEM trazem disciplina e ano, mas não a habilidade cognitiva específica exigida por cada questão (ex: H05, H23...) — informação que só existe na Matriz de Referência oficial do INEP, associada a cada questão manualmente. Esse projeto automatiza essa associação, usando um LLM para comparar o enunciado de cada questão às 120 descrições de habilidade da matriz e escolher a mais adequada.
 
-## Fontes de dados
+## Pipeline
 
-| Período | Fonte | Observações |
-|---|---|---|
-| 2009–2023 | [`yunger7/enem-api`](https://github.com/yunger7/enem-api) | JSONs oficiais por questão (pasta `public/{ano}/questions/`), disciplina já rotulada pela fonte |
-| 2024 | [`piresramon/gpt-4-enem`](https://github.com/piresramon/gpt-4-enem) (dataset Maritaca AI / [`maritaca-ai/enem`](https://huggingface.co/datasets/maritaca-ai/enem) no Hugging Face) | Sem campo `discipline` original — inferido pela posição da questão (ver seção *Limitações*) |
-| 2025 | Provas e gabaritos oficiais do [INEP](https://www.gov.br/inep/pt-br/areas-de-atuacao/avaliacao-e-exames-educacionais/enem/provas-e-gabaritos/2025) | Extraído via pipeline próprio em PDF (`extracao_pdf_labeling.ipynb`) |
+1. **Consolidação** — questões de múltiplas fontes públicas (2009–2023 e 2024) unificadas em um único JSON, com harmonização de schema entre as fontes.
+2. **Rotulagem de disciplina** — inferida pela posição da questão na prova, com regra condicional ao ano (a ordem das áreas mudou na reforma de 2017).
+3. **Limpeza** — extração do texto completo da alternativa correta, marcação de questões com figura (`[FIGURA]`), remoção de questões anuladas/sem resposta.
+4. **Baseline clássico** (TF-IDF + Regressão Logística) — teste de viabilidade num problema mais simples (classificar disciplina, 4 classes) antes de atacar o problema real (120 habilidades). O resultado (overfitting mesmo após tuning) confirmou que uma abordagem supervisionada clássica não escalaria para o problema de 120 classes com poucos exemplos cada.
+5. **Classificação via LLM local** — Ollama (`gemma3:4b`) com saída estruturada via Pydantic, restrita aos códigos da Matriz de Referência, com checkpointing e retry.
 
-## Notebooks
+## Dataset
 
-- **`extracao_pdf_labeling.ipynb`** — Extrai questões diretamente dos cadernos de prova em PDF (classe `EnemExamCorrigido`, baseada em PyMuPDF), trata layout de duas colunas, identifica e sinaliza questões com encoding corrompido, e separa enunciado/alternativas.
-- **`consolidacao_dataset.ipynb`** — Junta as questões de todas as fontes/anos em um único JSON (`enem_completo.json`), padroniza o schema e preenche disciplina ausente.
+- ~2.937 questões (2009–2024), consolidadas a partir de fontes públicas (incluindo o repositório `yunger7/enem-api` e o dataset da Maritaca AI).
+- Matriz de Referência: 120 habilidades, distribuídas em 4 áreas de conhecimento (Linguagens, Matemática, Ciências Humanas, Ciências da Natureza).
 
-## Schema
+## Classificação via LLM — detalhes
 
-Cada questão segue esta estrutura:
+Cada questão é enviada ao modelo junto da lista de habilidades da sua área, e a resposta é validada contra o schema:
 
-```json
-{
-  "title": "Questão 1 - ENEM 2009",
-  "index": 1,
-  "year": 2009,
-  "language": null,
-  "discipline": "ciencias-humanas",
-  "context": "...",
-  "files": [],
-  "correctAlternative": "C",
-  "alternativesIntroduction": null,
-  "alternatives": [
-    {"letter": "A", "text": "...", "file": null, "isCorrect": false}
-  ]
-}
+```python
+class HabilidadeClassificacao(BaseModel):
+    raciocinio: str
+    habilidade_principal: str   # ex: "H05"
+    habilidade_secundaria: str  # "" na maioria dos casos
+    confianca: float            # 0.0–1.0
+    justificativa: str
 ```
 
-`discipline` assume os valores: `linguagens`, `ciencias-humanas`, `ciencias-natureza`, `matematica`.
+- Códigos fora da matriz oficial da área geram um `alerta` para revisão manual, em vez de serem aceitos silenciosamente.
+- Progresso salvo em checkpoint (CSV) a cada 25 questões, com retry em caso de falha de geração/validação.
+- Processamento sequencial (a maioria dos servidores Ollama locais atende uma geração por vez).
 
-## Limitações conhecidas
+## Status atual
 
-- **Disciplina de 2024 é inferida por posição**, usando o padrão observado em 2023 como referência. A ordem das disciplinas no caderno não é um bloco perfeitamente fixo de 45 questões (há pequenos desvios perto das fronteiras de bloco em praticamente todos os anos), então essa inferência carrega incerteza residual — não deve ser tratada como rótulo oficial.
-- ~4,5% das questões extraídas via PDF (2025) foram sinalizadas com possível corrupção de texto/encoding durante a extração.
-- `topic` (tópico) e `competency`/`skill` (competência/habilidade) ainda não estão rotulados — próxima etapa do projeto.
+Pipeline validado numa amostra de 20 questões, com baixa taxa de erro. Execução completa sobre as ~2.900 questões ainda pendente.
+
+## Stack
+
+Python · pandas · scikit-learn · Ollama (`gemma3:4b`) · Pydantic · matplotlib / seaborn · wordcloud · tqdm
 
 ## Próximos passos
 
-- [ ] Rotular tópico e competência (avaliando: inferência por faixa de posição vs. dataset da USP com ~25k questões rotuladas até 2017)
-- [ ] Treinar modelo de classificação
-- [ ] Empacotar como API ou dashboard
-
-## Licença dos dados
-
-As questões do ENEM são de domínio público (INEP/MEC). Este repositório reorganiza e consolida dados já públicos de terceiros — consulte as fontes originais para os termos específicos de cada uma.
+- Validar uma amostra dos rótulos gerados contra julgamento humano/especialista.
+- Priorizar revisão manual pelas questões com `confianca` baixa ou `alerta` ativo.
+- Tratar separadamente as questões marcadas com `[FIGURA]`.
+- Escalar a execução para o dataset completo.
