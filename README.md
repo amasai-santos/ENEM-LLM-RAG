@@ -36,13 +36,30 @@ class HabilidadeClassificacao(BaseModel):
 - Progresso salvo em checkpoint (CSV) a cada 25 questões, com retry em caso de falha de geração/validação.
 - Processamento sequencial (a maioria dos servidores Ollama locais atende uma geração por vez).
 
-## Status atual
+## Resultados
 
-Pipeline validado numa amostra de 20 questões, com baixa taxa de erro. Execução completa sobre as ~2.900 questões ainda pendente.
+Validação feita em amostra estratificada por área (8% de cada disciplina, 223 questões — ~7,6% do dataset), já que a execução completa levaria ~16-17h de processamento local sequencial:
+
+| Métrica | Valor |
+|---|---|
+| Questões processadas | 223 |
+| Erros técnicos | 0 |
+| Códigos fora da matriz (`alerta`) | 4 (~1,8%) |
+| Tempo total | ~1h16min (≈20,5s/questão) |
 
 ## Stack
 
 Python · pandas · scikit-learn · Ollama (`gemma3:4b`) · Pydantic · matplotlib / seaborn · wordcloud · tqdm
+
+## Como rodar
+
+```bash
+pip install -r requirements.txt
+python -c "import nltk; nltk.download('stopwords')"
+ollama pull gemma3:4b
+```
+
+O Ollama precisa estar rodando localmente (`ollama serve`) antes de executar as células de classificação.
 
 ## Próximos passos
 
